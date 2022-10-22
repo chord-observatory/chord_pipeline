@@ -1,0 +1,4 @@
+-e git+ssh://git@github.com/radiocosmology/caput#egg=caput
+-e git+ssh://git@github.com/radiocosmology/cora#egg=cora
+-e git+ssh://git@github.com/chord-observatory/driftscan@dish_array_merge#egg=driftscan
+-e git+ssh://git@github.com/radiocosmology/draco#egg=draco
