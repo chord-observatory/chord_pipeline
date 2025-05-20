@@ -34,7 +34,7 @@ CHORD_LONGITUDE = -119.6236774310
 CHORD_ALTITUDE = 555.372  # m
 
 
-class _CHORD64Defaults(CustomDishArray, config.Reader, metaclass=abc.ABCMeta):
+class _CHORDDefaults(CustomDishArray, config.Reader, metaclass=abc.ABCMeta):
     """Mixin for a CHORD 64-element array.
 
     Identical to :py:class:`drift.telescope.custom_disharray.core.CustomDishArray`
@@ -71,8 +71,8 @@ class _CHORD64Defaults(CustomDishArray, config.Reader, metaclass=abc.ABCMeta):
         proptype=dict,
         default={
             "type": "grid",
-            "grid_ew": 11,
-            "grid_ns": 6,
+            "grid_ew": 22,
+            "grid_ns": 24,
             "spacing_ew": 6.3,
             "spacing_ns": 8.5,
         },
@@ -132,15 +132,27 @@ class _CHORD64Defaults(CustomDishArray, config.Reader, metaclass=abc.ABCMeta):
             return rotate_thetaphi_beam(beam, np.radians(-ddec), angpos)
 
 
-class _CHORDDefaults(_CHORD64Defaults):
+class CHORD(_CHORDDefaults, PolarisedTelescope):
+    """Single pointing CHORD 64-element array."""
+
+    pass
+
+
+class CHORDSurvey(MultiElevationSurvey, CHORD):
+    """Multi-pointing CHORD 64-element array."""
+
+    pass
+
+
+class _CHORD64Defaults(_CHORDDefaults):
 
     # Array layout
     layout_spec = config.Property(
         proptype=dict,
         default={
             "type": "grid",
-            "grid_ew": 22,
-            "grid_ns": 24,
+            "grid_ew": 11,
+            "grid_ns": 6,
             "spacing_ew": 6.3,
             "spacing_ns": 8.5,
         },
@@ -158,14 +170,3 @@ class CHORD64Survey(MultiElevationSurvey, CHORD64):
 
     pass
 
-
-class CHORD(_CHORDDefaults, PolarisedTelescope):
-    """Single pointing CHORD 64-element array."""
-
-    pass
-
-
-class CHORDSurvey(MultiElevationSurvey, CHORD):
-    """Multi-pointing CHORD 64-element array."""
-
-    pass
