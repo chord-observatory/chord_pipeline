@@ -1,1 +1,4 @@
+# Force all text files to use LF
+ * text=auto eol=lf
+
 chord_pipeline/_version.py export-subst
