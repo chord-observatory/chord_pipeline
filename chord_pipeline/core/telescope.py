@@ -35,7 +35,7 @@ CHORD_ALTITUDE = 555.372  # m
 
 
 class _CHORDDefaults(CustomDishArray, config.Reader, metaclass=abc.ABCMeta):
-    """Mixin for a CHORD 64-element array.
+    """Mixin for a CHORD 528-element array.
 
     Identical to :py:class:`drift.telescope.custom_disharray.core.CustomDishArray`
     but with defaults mentioned above.
@@ -133,13 +133,13 @@ class _CHORDDefaults(CustomDishArray, config.Reader, metaclass=abc.ABCMeta):
 
 
 class CHORD(_CHORDDefaults, PolarisedTelescope):
-    """Single pointing CHORD 64-element array."""
+    """Single pointing CHORD 528-element array."""
 
     pass
 
 
 class CHORDSurvey(MultiElevationSurvey, CHORD):
-    """Multi-pointing CHORD 64-element array."""
+    """Multi-pointing CHORD 528-element array."""
 
     pass
 
