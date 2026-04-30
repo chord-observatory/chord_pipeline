@@ -1,0 +1,64 @@
+# System prereqs:
+#   - Python >= 3.11
+#   - GCC >= 13
+#   - OpenMPI (or another MPI implementation)
+#   - HDF5 with MPI support (libhdf5-mpi-dev or equivalent)
+#   - FFTW3 (libfftw3-dev, needed by pyfftw)
+
+# Packages that were provided by Compute Canada's scipy-stack module
+numpy
+scipy
+pandas
+h5py
+matplotlib
+sympy
+scikit-learn
+seaborn
+
+# MPI bindings (must be compiled against your system's MPI)
+mpi4py
+
+# Python dependencies (from modules/modulefiles/chord/python/requirements.txt)
+ansimarkup
+arrow
+astropy
+bitshuffle
+black
+cachetools
+click
+concurrent-log-handler
+cython
+docopt
+flake8
+future
+healpy>=1.8
+iniconfig
+ipympl
+ipython
+jupyter
+mysql-connector-python
+networkx>=2.0
+numcodecs>=0.7.3,<0.16
+peewee>=3.12
+pep8
+pluggy
+psutil
+py
+pyfftw>=0.13.1
+pyinstrument
+pytest
+pywavelets
+PyYAML
+ruff
+skyfield>=1.31
+sshtunnel
+tabulate
+ujson
+watchdog
+virtualenv
+zarr<3
+-e git+https://github.com/radiocosmology/caput.git#egg=caput
+-e git+https://github.com/radiocosmology/cora.git#egg=cora
+-e git+https://github.com/radiocosmology/draco.git#egg=draco
+-e git+https://github.com/radiocosmology/fluxcat.git#egg=fluxcat
+-e git+https://github.com/chord-observatory/driftscan.git@dish_array_merge_main#egg=driftscan
