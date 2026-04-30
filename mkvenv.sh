@@ -7,19 +7,21 @@ code_path="./venv/src"
 ignore_system="false"
 reset_env="false"
 legacy_setup="false"
+requirements_file="requirements.txt"
 
-help_message="$(basename $0) [-n VENV_NAME] [-v VENV_PATH] [-e CODE_PATH] [-i] [-r] \n\n
+help_message="$(basename $0) [-n VENV_NAME] [-v VENV_PATH] [-e CODE_PATH] [-i] [-r] [-s] \n\n
                 -n  \t Virtual environment name that will appear in your terminal prompt when activated. \n
-                    \t\t Defaults to '$venv_name'. \n  
+                    \t\t Defaults to '$venv_name'. \n
                 -v  \t Path where virtual environment will be installed. \n
                     \t\t Defaults to '$venv_path'. \n
                 -e  \t Path where packages will be cloned for development. \n
                     \t\t Defaults to '$code_path'. \n
                 -i  \t Ignore packages already installed on your system, i.e., install all dependencies. \n
-                -r  \t Remove any existing virtual environment at VENV_PATH before creating a new one. \n"
+                -r  \t Remove any existing virtual environment at VENV_PATH before creating a new one. \n
+                -s  \t Use requirements_site_computers.txt instead of requirements.txt (for site computers). \n"
 
 # Parse any options provided by user
-while getopts 'hn:v:e:irl' OPTION; do
+while getopts 'hn:v:e:irls' OPTION; do
     case "$OPTION" in
         n)
             venv_name="($OPTARG)"
@@ -39,6 +41,10 @@ while getopts 'hn:v:e:irl' OPTION; do
 
         r)
             reset_env="true"
+            ;;
+
+        s)
+            requirements_file="requirements_site_computers.txt"
             ;;
 
         h)
@@ -71,9 +77,9 @@ source $venv_path/bin/activate
 mkdir -p $code_path
 pip install --use-deprecated=legacy-resolver Cython
 if ${ignore_system}; then
-    pip install --use-deprecated=legacy-resolver --src $code_path -r requirements.txt
+    pip install --use-deprecated=legacy-resolver --src $code_path -r $requirements_file
 else
-    pip install --no-build-isolation --use-deprecated=legacy-resolver --src $code_path -r requirements.txt
+    pip install --no-build-isolation --use-deprecated=legacy-resolver --src $code_path -r $requirements_file
 fi
 
 # Install this package (modern by default; legacy option retained for compatibility)
