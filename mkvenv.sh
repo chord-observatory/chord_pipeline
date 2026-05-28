@@ -73,6 +73,9 @@ else
 fi
 source $venv_path/bin/activate
 
+# Need to update these
+"$VENV_PATH/bin/python" -m pip install -U  "packaging>=24.2" trove-classifiers
+
 # Install the packages
 mkdir -p $code_path
 pip install --use-deprecated=legacy-resolver Cython
