@@ -5,3 +5,6 @@ h5py
 -e git+ssh://git@github.com/radiocosmology/cora#egg=cora
 -e git+ssh://git@github.com/radiocosmology/driftscan#egg=driftscan
 -e git+ssh://git@github.com/radiocosmology/draco#egg=draco
+# chord_util (CHORD analogue of ch_util; provides chord_util.andata). Not on GitHub yet:
+# install it with `pip install -e /project/rrg-kmsmith/arnab92/pipe_test/chord_util`,
+# and replace this comment with its git URL once it has a remote.
