@@ -1,12 +1,13 @@
-"""Shared fixtures: synthetic X-engine acquisitions (see chord_util.testing)."""
+"""Shared fixtures: synthetic X-engine acquisitions (see xengine_testdata.py)."""
 
 import pathlib
 
 import numpy as np
 import pytest
 from caput.util import mpitools
-from chord_util import testing
 from drift.core.telescope import TransitTelescope
+
+import xengine_testdata
 
 
 @pytest.fixture(scope="session")
@@ -20,12 +21,12 @@ def acq(tmp_path_factory):
     files : list of str
         The X-engine files.
     truth : dict
-        The data they encode, see `chord_util.testing.make_xengine_files`.
+        The data they encode, see `xengine_testdata.make_xengine_files`.
     """
     out = None
     if mpitools.rank0:
         root = tmp_path_factory.mktemp("xengine")
-        files, truth = testing.make_xengine_files(root)
+        files, truth = xengine_testdata.make_xengine_files(root)
         out = (pathlib.Path(root), files, truth)
     out = mpitools.bcast(out, root=0)
     mpitools.barrier()

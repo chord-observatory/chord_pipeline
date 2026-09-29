@@ -16,8 +16,8 @@ If you prefer a different location/name, use `mkvenv.sh -h` for options (`-v` fo
 
 ## Tests
 
-The tests use small synthetic X-engine files from `chord_util.testing`, so no
-real data is needed. With the environment activated:
+The tests use small synthetic X-engine files from `tests/xengine_testdata.py`,
+so no real data is needed. With the environment activated:
 
 ```sh
 python -m pytest                # serial
