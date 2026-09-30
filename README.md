@@ -1,21 +1,15 @@
-# CHORD Analysis Pipeline
+<h1 align="center">CHORD Analysis Pipeline</h1>
 
-This is the repository for the CHORD analysis pipeline: the
-[`caput.pipeline`](https://caput.readthedocs.io/) tasks, containers and
-telescope models used to process CHORD data (loading X-engine data, flagging,
-calibration, ...) and to simulate it. It builds on the shared radiocosmology
-packages ([caput](https://github.com/radiocosmology/caput),
-[draco](https://github.com/radiocosmology/draco),
-[driftscan](https://github.com/radiocosmology/driftscan),
-[cora](https://github.com/radiocosmology/cora)) and on
-[chord_util](https://github.com/chord-observatory/chord_util), much as CHIME's
-[ch_pipeline](https://github.com/chime-experiment/ch_pipeline) builds on them
-and on ch_util.
 
-Development follows the
-[CHORD pipeline guidelines](https://github.com/chord-observatory/Pipeline),
+This is the repository for the CHORD analysis pipeline. 
+
+Development follows the [CHORD pipeline guidelines](https://github.com/chord-observatory/Pipeline),
 which describe the workflow, reviews, coding rules, testing and releases for
 all CHORD analysis software. Please read them before contributing.
+
+Important notes:
+
+ - *Don't* develop directly in `main`, use a feature branch for any change, and merge back into *main* promptly. Merging should be done by filing a Pull Request.
 
 ## Installation
 
@@ -48,16 +42,14 @@ all CHORD analysis software. Please read them before contributing.
     ```
 
 ## Structure
+Tasks should go into the appropriate subdirectory of `chord_pipeline/`.
 
 - `chord_pipeline/core/`: the basic building blocks
-  - `container.py`: containers for CHORD data, e.g. `CHORDTimeStream`, a draco
-    `TimeStream` holding X-engine data with its data quality, timing and
-    per-input information
+  - `container.py`: containers for CHORD data products.
   - `io.py`: tasks to find and load data, e.g. `QueryAcquisitionFiles` and
-    `LoadCorrDataFiles` (X-engine files, via `chord_util.andata`)
-  - `telescope.py`: driftscan telescope models of the CHORD array
-- `chord_pipeline/analysis/`: tasks operating on data, e.g. `SelectInputs` and
-  `RemoveRFIMonitors`
+    `LoadCorrDataFiles`.
+  - `telescope.py`: telescope models of the CHORD array
+- `chord_pipeline/analysis/`: tasks operating on data.
 - `chord_pipeline/processing/`: tools to run the pipeline in production
 - `chord_pipeline/synthesis/`: tasks for simulating data
 
@@ -114,10 +106,14 @@ rrg-kmsmith access; a few GB of memory, a few minutes) and is skipped
 elsewhere. Point it at other data with `CHORD_XENGINE_DATA` (directory of
 acquisitions) and `CHORD_XENGINE_ACQ` (acquisition name).
 
-## Development
+## Development and Coding Standards
 
-The [CHORD pipeline guidelines](https://github.com/chord-observatory/Pipeline)
-have the details; in short:
+Code should adhere to the [CHORD contribution guidelines](https://github.com/chord-observatory/Pipeline/blob/main/CONTRIBUTING.md).
+If you haven't looked at it please do so.
+
+Also check the  [CHORD pipeline guidelines](https://github.com/chord-observatory/Pipeline). 
+
+The main points are:
 
 - **Branches.** Work in a short-lived feature branch named with your initials
   (e.g. `ab/short-description`) off `main`, and merge it back through a pull
