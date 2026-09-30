@@ -61,4 +61,4 @@ zarr<3
 -e git+https://github.com/radiocosmology/cora.git#egg=cora
 -e git+https://github.com/radiocosmology/draco.git#egg=draco
 -e git+https://github.com/radiocosmology/fluxcat.git#egg=fluxcat
--e git+https://github.com/chord-observatory/driftscan.git@dish_array_merge_main#egg=driftscan
+-e git+ssh://git@github.com/radiocosmology/driftscan#egg=driftscan 

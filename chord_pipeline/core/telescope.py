@@ -1,8 +1,8 @@
 """Simple models for the CHORD array.
 
 Identical to telescope objects in
-:py:mod:`drift.telescope.custom_disharray.core.PolarisedDishArray` and
-:py:mod:`drift.telescope.custom_disharray.core.PolarisedDishArraySurvey`,
+:py:mod:`drift.telescope.disharray.core.PolarisedDishArray` and
+:py:mod:`drift.telescope.disharray.core.PolarisedDishArraySurvey`,
 but with the following CHORD defaults:
     * Frequency channels set to the CHORD band (300-1500 MHz with 3276 channels)
     * Observatory location set to the approximate location of the CHORD array
@@ -25,8 +25,8 @@ import numpy as np
 from caput import config
 
 from drift.core.telescope import PolarisedTelescope
-from drift.telescope.custom_disharray.core import MultiElevationSurvey, CustomDishArray
-from drift.telescope.custom_disharray.beams import rotate_thetaphi_beam
+from drift.telescope.disharray.core import MultiElevationSurvey, DishArrayMixin
+from drift.telescope.disharray.beams import rotate_thetaphi_beam
 
 # CHIME coordinates
 CHORD_LATITUDE = 49.3207092194
@@ -34,10 +34,10 @@ CHORD_LONGITUDE = -119.6236774310
 CHORD_ALTITUDE = 555.372  # m
 
 
-class _CHORDDefaults(CustomDishArray, config.Reader, metaclass=abc.ABCMeta):
+class _CHORDDefaults(DishArrayMixin, config.Reader, metaclass=abc.ABCMeta):
     """Mixin for a CHORD 528-element array.
 
-    Identical to :py:class:`drift.telescope.custom_disharray.core.CustomDishArray`
+    Identical to :py:class:`drift.telescope.disharray.core.DishArrayMixin`
     but with defaults mentioned above.
     """
 
