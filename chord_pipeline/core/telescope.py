@@ -18,11 +18,14 @@ configuration parameter.
 """
 
 import abc
+import logging
 from typing import Optional
 
 import numpy as np
 
 from caput import config
+from caput.pipeline import Task
+from chord_util import layout as chord_layout
 
 from drift.core.telescope import PolarisedTelescope
 from drift.telescope.disharray.core import MultiElevationSurvey, DishArrayMixin
@@ -145,7 +148,6 @@ class CHORDSurvey(MultiElevationSurvey, CHORD):
 
 
 class _CHORD64Defaults(_CHORDDefaults):
-
     # Array layout
     layout_spec = config.Property(
         proptype=dict,
@@ -170,3 +172,149 @@ class CHORD64Survey(MultiElevationSurvey, CHORD64):
 
     pass
 
+
+class _InputLayout:
+    """Minimal stand-in for a drift layout object: feed positions and polarisations."""
+
+    def __init__(self, feedpositions, polarisation):
+        self.feedpositions = feedpositions
+        self.polarisation = polarisation
+
+
+class CHORDPathfinder(_CHORDDefaults, PolarisedTelescope):
+    """The CHORD pathfinder: one feed per correlator input.
+
+    Unlike the grid telescopes above, the feeds are the inputs of a layout file
+    (see :mod:`chord_util.layout`), in the order of the data, and the bad inputs are
+    removed from the feed mask.
+
+    Attributes
+    ----------
+    layout_file : str, optional
+        Layout file. Default the pathfinder layout of chord_util.
+    bad_inputs : list of str
+        Labels of the inputs to remove.
+    freq_list : list of float, optional
+        Explicit channel centres in MHz, for data with a selection of channels.
+        Default the channels of the CHORD band.
+    """
+
+    layout_file = config.Property(proptype=str, default=None)
+    bad_inputs = config.Property(proptype=list, default=[])
+    freq_list = config.Property(proptype=list, default=None)
+
+    def _finalise_config(self):
+        super()._finalise_config()
+        layout = chord_layout.read_layout(self.layout_file)
+        self.layout_obj = _InputLayout(
+            np.column_stack([layout["ew_m"], layout["ns_m"]]).astype(np.float64),
+            np.asarray(layout["pol"]).astype(str),
+        )
+        self.input_labels = np.asarray(layout["label"]).astype(str)
+        self.input_chan_id = np.asarray(layout["chan_id"]).astype(int)
+
+    def calculate_frequencies(self):
+        """Use the explicit channel centres, if there are any."""
+        if self.freq_list is None:
+            return super().calculate_frequencies()
+        self._frequencies = np.array(self.freq_list, dtype=np.float64)
+
+    @property
+    def input_index(self):
+        """Index map of the inputs, to match them with those of the data."""
+        out = np.zeros(
+            len(self.input_labels),
+            dtype=[("chan_id", "u2"), ("correlator_input", "U32")],
+        )
+        out["chan_id"] = self.input_chan_id
+        out["correlator_input"] = self.input_labels
+        return out
+
+    def _unique_beams(self):
+        beam_map, beam_mask = super()._unique_beams()
+        good = ~np.isin(self.input_labels, self.bad_inputs)
+        return beam_map, beam_mask & good[:, None] & good[None, :]
+
+
+class LoadPathfinderTelescope(Task):
+    """Make the CHORD pathfinder telescope.
+
+    The layout is the same every night, and the pointing and the bad inputs are not.
+    Both of these are taken here from ``data_file``, unless they are given explicitly:
+    the pointing from its attributes, and the bad inputs from the feed mask history
+    (:func:`chord_util.layout.bad_inputs_at`) at its first time.
+
+    Attributes
+    ----------
+    layout_file : str, optional
+        Layout file. Default the pathfinder layout of chord_util.
+    data_file : str, optional
+        A timestream or X-engine file of the data to analyse.
+    dec_pointing : float, optional
+        Declination of the pointing in degrees. Default from the attributes of
+        ``data_file``.
+    bad_inputs : list of str, optional
+        Labels of the bad inputs. Default from the feed mask history at the time of
+        ``data_file``.
+    feedmask_file : str, optional
+        Feed mask history. Default that of chord_util.
+    freq_file : str, optional
+        A file with the channels of the data, when they are a selection of the band
+        (for ``CollateProducts``).
+    freq_list : list of float, optional
+        The channel centres in MHz, instead of ``freq_file``.
+
+    Notes
+    -----
+    The pointing sets only the beam model of the telescope. The eigen-calibration
+    uses the source's own coordinates.
+    """
+
+    layout_file = config.Property(proptype=str, default=None)
+    data_file = config.Property(proptype=str, default=None)
+    dec_pointing = config.Property(proptype=float, default=None)
+    bad_inputs = config.Property(proptype=list, default=None)
+    feedmask_file = config.Property(proptype=str, default=None)
+    freq_file = config.Property(proptype=str, default=None)
+    freq_list = config.Property(proptype=list, default=None)
+
+    def setup(self):
+        """Return the telescope."""
+        import h5py
+        from chord_ephem.observers import chord
+
+        dec, time = self.dec_pointing, None
+        if self.data_file is not None:
+            with h5py.File(self.data_file, "r") as fh:
+                if dec is None:
+                    dec = chord_layout.pointing_dec(fh.attrs)
+                t0 = fh["index_map/time"][0]
+                time = float(t0["ctime"] if t0.dtype.names else t0)
+        if dec is None:
+            raise ValueError("Give data_file or dec_pointing.")
+
+        bad = self.bad_inputs
+        if bad is None:
+            if time is None:
+                raise ValueError("Give data_file or bad_inputs.")
+            bad = sorted(chord_layout.bad_inputs_at(time, self.feedmask_file))
+
+        freq_list = self.freq_list
+        if self.freq_file is not None:
+            with h5py.File(self.freq_file, "r") as fh:
+                freq_list = [float(f) for f in fh["index_map/freq"]["centre"][:]]
+
+        logging.getLogger(__name__).info(
+            f"Pointing Dec {dec:.3f} deg, {len(bad)} bad inputs: {bad}"
+        )
+        conf = {
+            "bad_inputs": list(bad),
+            "latitude": chord.latitude,
+            "longitude": chord.longitude,
+            "elevation_pointing_offset": dec - chord.latitude,
+        }
+        if self.layout_file is not None:
+            conf["layout_file"] = self.layout_file
+        if freq_list is not None:
+            conf["freq_list"] = freq_list
+        return CHORDPathfinder.from_config(conf)
