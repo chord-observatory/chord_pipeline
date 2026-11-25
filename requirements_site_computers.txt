@@ -62,3 +62,4 @@ zarr<3
 -e git+https://github.com/radiocosmology/draco.git#egg=draco
 -e git+https://github.com/radiocosmology/fluxcat.git#egg=fluxcat
 -e git+ssh://git@github.com/radiocosmology/driftscan#egg=driftscan 
+-e git+ssh://git@github.com/chord-observatory/chord_util#egg=chord_util
