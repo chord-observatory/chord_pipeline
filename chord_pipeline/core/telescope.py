@@ -236,6 +236,16 @@ class CHORDPathfinder(_CHORDDefaults, PolarisedTelescope):
         return beam_map, beam_mask & good[:, None] & good[None, :]
 
 
+def _first_time(fh):
+    """UNIX time of the first sample of a timestream or an X-engine file."""
+    if "index_map/time" in fh:
+        t0 = fh["index_map/time"][0]
+        return float(t0["ctime"] if t0.dtype.names else t0)
+    # X-engine file: the first filled time bin (unfilled bins have zero time)
+    t_ns = fh["time_center_t_inst_ns"][:]
+    return float(t_ns[t_ns != 0][0]) * 1e-9
+
+
 class LoadPathfinderTelescope(Task):
     """Make the CHORD pathfinder telescope.
 
@@ -288,8 +298,7 @@ class LoadPathfinderTelescope(Task):
             with h5py.File(self.data_file, "r") as fh:
                 if dec is None:
                     dec = chord_layout.pointing_dec(fh.attrs)
-                t0 = fh["index_map/time"][0]
-                time = float(t0["ctime"] if t0.dtype.names else t0)
+                time = _first_time(fh)
         if dec is None:
             raise ValueError("Give data_file or dec_pointing.")
 
