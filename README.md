@@ -50,6 +50,9 @@ Tasks should go into the appropriate subdirectory of `chord_pipeline/`.
     `LoadCorrDataFiles`.
   - `telescope.py`: telescope models of the CHORD array
 - `chord_pipeline/analysis/`: tasks operating on data.
+  - `calibration.py`: eigen-calibration with a point source transit
+    (eigendecomposition, response, transit fit, gains, flagging and
+    interpolation), as in `ch_pipeline.analysis.calibration`.
 - `chord_pipeline/processing/`: tools to run the pipeline in production
 - `chord_pipeline/synthesis/`: tasks for simulating data
 

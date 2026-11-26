@@ -6,3 +6,5 @@ h5py
 -e git+ssh://git@github.com/radiocosmology/driftscan#egg=driftscan
 -e git+ssh://git@github.com/radiocosmology/draco#egg=draco
 -e git+ssh://git@github.com/chord-observatory/chord_util#egg=chord_util
+# chord_util.cal_utils.interpolate_gain (InterpolateGainOverFrequency)
+scikit-learn
