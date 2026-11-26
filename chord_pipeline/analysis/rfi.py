@@ -1,6 +1,6 @@
 """Tasks for RFI flagging of CHORD data.
 
-- :class:`ComputeSystemSensitivity`: draco's
+- :class:`ComputeSystemSensitivity`: a copy of draco's
   :class:`~draco.analysis.sensitivity.ComputeSystemSensitivity` for a dish array.
 - :class:`RFISensitivityMask`: an RFI mask from the ratio of the measured to the
   radiometric noise, with the MAD and SumThreshold flagger of
@@ -20,8 +20,7 @@ import numpy as np
 from caput import config
 from caput.pipeline import tasklib
 from chord_util import rfi as crfi
-from draco.analysis import sensitivity
-from draco.core import containers
+from draco.core import containers, io
 from draco.util import tools
 
 
@@ -30,127 +29,290 @@ def _float_or_none(x):
     return None if x is None else float(x)
 
 
-class _DishesAsCylinders:
-    """A view of a telescope in which every dish is a cylinder, for draco.
+class ComputeSystemSensitivity(tasklib.base.ContainerTask):
+    """Compute the sensitivity of beamformed visibilities.
 
-    draco's ``ComputeSystemSensitivity`` leaves out the baselines within a
-    cylinder (``exclude_intracyl``) by comparing the east-west separation of the
-    two feeds with half of ``cylinder_width``. In this view the inputs at the same
-    position (the X and Y feeds of a dish) share an east-west coordinate, the
-    dishes are numbered 0, 1, 2, ... in metres, and ``cylinder_width`` is 1 m, so
-    the baselines left out are the autocorrelations and the X-Y products of each
-    dish. Every other attribute is that of the telescope.
+    A copy of :class:`draco.analysis.sensitivity.ComputeSystemSensitivity`
+    (draco commit dde3c0f) for a dish array. Only two things are changed, marked
+    with "CHORD:" below:
+
+    - The baselines left out are those within a dish (the autocorrelations and
+      the X-Y products of each dish) instead of those within a cylinder. As for
+      the intracylinder baselines of CHIME, the noise of these baselines is not
+      independent, which the radiometer equation assumes. Two feeds are on the
+      same dish if they are closer than half the minimum separation of the
+      dishes of the telescope.
+    - The number of independent samples is the number counted by the X-engine
+      (``flags/valid_fpga_count``), when the data has it. draco calculates it
+      from the median integration time, but the X-engine integrations are not
+      all of one length (they differ by one frame, 0.85 %).
+
+    Parameters
+    ----------
+    exclude_intradish : bool
+        Exclude the intradish baselines (the autocorrelations and the X-Y
+        products of each dish) in the sensitivity estimate. Default is True.
+        Note that a RuntimeError will be raised if exclude_intradish is True and
+        the visibilities have already been stacked over dish.
     """
 
-    cylinder_width = 1.0
-
-    def __init__(self, telescope):
-        self._telescope = telescope
-        # Positions to the millimetre: the two feeds of a dish are at one position
-        pos = np.round(np.asarray(telescope.feedpositions, dtype=np.float64), 3)
-        _, dish = np.unique(pos, axis=0, return_inverse=True)
-        dish = np.asarray(dish).ravel().astype(np.float64)
-        self.feedpositions = np.column_stack([dish, np.zeros_like(dish)])
-        self.ndish = int(dish.max()) + 1 if dish.size else 0
-
-    def __getattr__(self, name):
-        if name == "_telescope":
-            raise AttributeError(name)
-        return getattr(self._telescope, name)
-
-
-class ComputeSystemSensitivity(sensitivity.ComputeSystemSensitivity):
-    """draco's ``ComputeSystemSensitivity`` for a dish array.
-
-    The calculation is draco's, with two differences for CHORD:
-
-    - The autocorrelations and the X-Y products of each dish are left out, as
-      the CHIME daily pipeline leaves out the baselines within a cylinder
-      (``exclude_intracyl: true``): their noise is not independent, which the
-      radiometer equation assumes. This is done with draco's own
-      ``exclude_intracyl`` code, on a view of the telescope in which every dish
-      is a cylinder (the feeds at one position are one dish). It is always on and
-      is not a config parameter.
-    - The number of samples of each integration is the one the X-engine counted
-      (``flags/valid_fpga_count``). draco uses channel width x median integration
-      time x (1 - ``frac_lost``), but the X-engine integrations are not all of
-      one length (they differ by a frame, 0.85 %), which biases the radiometric
-      noise of the short ones. The radiometric noise is rescaled by
-      ``sqrt(n_draco / valid_fpga_count)``; without ``valid_fpga_count`` in the
-      data, draco's value is kept.
-
-    As in draco, the inputs used are those with nonzero ``input_flags``: remove
-    the bad inputs before this task (e.g. with ``SelectInputs``) or flag them in
-    ``input_flags``. The bad inputs of the telescope are not used for this. The
-    output is draco's: the polarisation products are XX, XY (XY and YX together)
-    and YY, ``measured`` and ``radiometer`` are the noise of the real part, and
-    ``weight`` counts each baseline twice (both triangles of the visibility
-    matrix).
-    """
-
-    # Always on (with every dish a cylinder); not a config parameter
-    exclude_intracyl = True
+    # CHORD: replaces draco's exclude_intracyl (default False). The CHIME daily
+    # pipeline runs with exclude_intracyl: true.
+    exclude_intradish = config.Property(proptype=bool, default=True)
 
     def setup(self, telescope):
-        """Save the telescope, as a view in which every dish is a cylinder.
+        """Save the telescope model.
 
         Parameters
         ----------
-        telescope : TransitTelescope or ProductManager
-            The telescope, e.g. from ``LoadPathfinderTelescope``.
+        telescope : TransitTelescope
+            Telescope object to use
         """
-        super().setup(telescope)
-        self.telescope = _DishesAsCylinders(self.telescope)
-        self.log.debug(f"{self.telescope.ndish} dishes in the telescope")
+        self.telescope = io.get_telescope(telescope)
 
     def process(self, data):
-        """Compute the sensitivity.
+        """Estimate the sensitivity of the input data.
 
         Parameters
         ----------
-        data : CHORDTimeStream
-            Timestream with the autocorrelations and the weights.
+        data : TODContainer
+            Must have a weight property that contains an
+            estimate of the inverse variance of the noise
+            in each visibility.  The visibilities can be
+            stacked to any level of redundancy.
 
         Returns
         -------
-        sens : draco.core.containers.SystemSensitivity
-            As from draco, with the radiometric noise for the number of samples
-            that the X-engine counted.
+        metrics : SystemSensitivity
+            Contains the measured and radiometric estimates of
+            the noise in the beamformed visibilities.
         """
-        sens = super().process(data)
+        # Ensure we are distributed over frequency. Get shape of visibilities.
+        data.redistribute("freq")
 
-        if "flags/valid_fpga_count" not in data:
+        nfreq, _, ntime = data.vis.local_shape
+
+        # Extract the input flags.  If container has a gain dataset,
+        # then also check for the default gain 1.0 + 0.0j as this indicates
+        # that an input was masked for a particular time and frequency.
+        inpflg = data.input_flags[:].view(np.ndarray).astype(bool)
+        niff = 1
+
+        if "gain" in data.datasets:
+            # Derive frequency dependent flags from gains
+            gainflg = data.gain[:].local_array != (1.0 + 0.0j)
+            inpflg = np.swapaxes(inpflg[np.newaxis, :, :] & gainflg, 0, 1)
+            # Flatten frequency and time axis so we can use numpy's unique
+            inpflg = inpflg.reshape(inpflg.shape[0], -1)
+            niff = nfreq
+
+        # Find unique sets of input flags
+        uniq_inpflg, index_cnt = np.unique(inpflg, return_inverse=True, axis=1)
+
+        # Calculate redundancy for each unique set of input flags
+        cnt = tools.calculate_redundancy(
+            uniq_inpflg.astype(np.float32),
+            data.prod,
+            data.reverse_map["stack"]["stack"],
+            data.stack.size,
+        )
+
+        # Determine stack axis
+        stack_new, stack_flag = tools.redefine_stack_index_map(
+            self.telescope, data.input, data.prod, data.stack, data.reverse_map["stack"]
+        )
+
+        if not np.all(stack_flag):
             self.log.warning(
-                "No flags/valid_fpga_count in the data: keeping draco's number of "
-                "samples (channel width x integration time x (1 - frac_lost))."
+                f"There are {np.sum(~stack_flag):0.0f} stacked baselines that are "
+                "masked in the telescope instance."
             )
-            return sens
 
-        # draco's number of samples, as computed in draco
+        ps = data.prod[stack_new["prod"]]
+        conj = stack_new["conjugate"]
+
+        prodstack = ps.copy()
+        prodstack["input_a"] = np.where(conj, ps["input_b"], ps["input_a"])
+        prodstack["input_b"] = np.where(conj, ps["input_a"], ps["input_b"])
+
+        # Figure out mapping between inputs in data file and inputs in telescope
+        tel_index = tools.find_inputs(
+            self.telescope.input_index, data.input, require_match=False
+        )
+
+        # Use the mapping to extract polarisation and position of each input
+        input_pol = np.array(
+            [
+                self.telescope.polarisation[ti] if ti is not None else "N"
+                for ti in tel_index
+            ]
+        )
+
+        # CHORD: the full (EW, NS) position, where draco uses the EW position only
+        position = np.array(
+            [
+                self.telescope.feedpositions[ti, :2]
+                if ti is not None
+                else (np.nan, np.nan)
+                for ti in tel_index
+            ],
+            dtype=np.float64,
+        ).reshape(-1, 2)
+
+        # Next we determine indices into the stack axis for each polarisation product
+        # The next three lines result in XY and YX being
+        # combined into a single polarisation product
+        pa, pb = input_pol[prodstack["input_a"]], input_pol[prodstack["input_b"]]
+        pol_a = np.where(pa <= pb, pa, pb)
+        pol_b = np.where(pa <= pb, pb, pa)
+
+        # CHORD: np.char.add is the same function as draco's
+        # np.core.defchararray.add, without the numpy deprecation warning
+        baseline_pol = np.char.add(pol_a, pol_b)
+
+        # CHORD: two feeds are on the same dish if they are closer than half the
+        # minimum separation of the dishes. This replaces draco's test
+        # |EW separation| < cylinder_width / 2. Feeds not in the telescope have
+        # a NaN position and are never intradish.
+        intra_dish_sep = 0.5 * min(self.telescope.u_width, self.telescope.v_width)
+
+        def _intra_dish(ia, ib):
+            dpos = position[ia] - position[ib]
+            return np.hypot(dpos[..., 0], dpos[..., 1]) < intra_dish_sep
+
+        if self.exclude_intradish:
+            baseline_flag = ~_intra_dish(prodstack["input_a"], prodstack["input_b"])
+        else:
+            baseline_flag = np.ones(prodstack.size, dtype=bool)
+
+        pol_uniq = [bp for bp in np.unique(baseline_pol) if "N" not in bp]
+        pol_index = [
+            np.flatnonzero((baseline_pol == up) & baseline_flag) for up in pol_uniq
+        ]
+        npol = len(pol_uniq)
+
+        auto_flag = (prodstack["input_a"] == prodstack["input_b"]).astype(np.float32)
+
+        if self.exclude_intradish and (np.sum(auto_flag) == npol):
+            raise ValueError(
+                "You have requested the exclusion of "
+                "intradish baselines,  however it appears "
+                "that the visibilities have already been stacked "
+                "over dish, preventing calculation of the "
+                "radiometric estimate."
+            )
+
+        # Dereference the weight dataset
+        bweight = data.weight[:].local_array
+        bflag = bweight > 0.0
+
+        # Initialize arrays
+        var = np.zeros((nfreq, npol, ntime), dtype=np.float32)
+        counter = np.zeros((nfreq, npol, ntime), dtype=np.float32)
+
+        # Average over selected baseline per polarization
+        for pp, ipol in enumerate(pol_index):
+            pcnt = cnt[ipol, :]
+            pscale = 2.0 - auto_flag[ipol, np.newaxis]
+
+            # Loop over frequencies to reduce memory usage
+            for ff in range(nfreq):
+                fslc = slice((ff % niff) * ntime, ((ff % niff) + 1) * ntime)
+                pfcnt = pcnt[:, index_cnt[fslc]]
+
+                pvar = tools.invert_no_zero(bweight[ff, ipol, :])
+                pflag = bflag[ff, ipol, :].astype(np.float32)
+
+                var[ff, pp, :] = np.sum(pfcnt**2 * pscale * pflag * pvar, axis=0)
+
+                counter[ff, pp, :] = np.sum(pfcnt * pscale * pflag, axis=0)
+
+        # Normalize
+        var *= tools.invert_no_zero(counter**2)
+
+        # Determine which of the stack indices correspond to autocorrelations
+        auto_stack_id = np.flatnonzero(auto_flag)
+        auto_input = prodstack["input_a"][auto_stack_id]
+        auto_pol = input_pol[auto_input]
+
+        auto_cnt = cnt[auto_stack_id, :][:, index_cnt]
+        auto_cnt = np.swapaxes(auto_cnt.reshape(-1, niff, ntime), 0, 1)
+        num_feed = auto_cnt * bflag[:, auto_stack_id, :].astype(np.float32)
+
+        auto = data.vis[:, auto_stack_id, :].local_array.real
+
+        # Construct the radiometric estimate of the noise by taking the sum
+        # of the product of pairs of (possibly stacked) autocorrelations.
+        radiometer = np.zeros((nfreq, npol, ntime), dtype=np.float32)
+        radiometer_counter = np.zeros((nfreq, npol, ntime), dtype=np.float32)
+
+        # CHORD: the same dish test for the pairs of autocorrelations
+        auto_intra = _intra_dish(auto_input[:, np.newaxis], auto_input[np.newaxis, :])
+
+        for ii, (ai, pi) in enumerate(zip(auto_input, auto_pol)):
+            for jj, (aj, pj) in enumerate(zip(auto_input, auto_pol)):
+                if self.exclude_intradish and auto_intra[ii, jj]:
+                    # Exclude intradish baselines
+                    continue
+
+                # Combine XY and YX into single polarisation product
+                pp = pol_uniq.index(pi + pj) if pi <= pj else pol_uniq.index(pj + pi)
+
+                # Weight by the number of feeds that were averaged
+                # together to obtain each stacked autocorrelation
+                nsq = num_feed[:, ii, :] * num_feed[:, jj, :]
+
+                radiometer[:, pp, :] += nsq * auto[:, ii, :] * auto[:, jj, :]
+
+                radiometer_counter[:, pp, :] += nsq
+
+        # Calculate number of independent samples from the
+        # integration time, frequency resolution, and fraction of packets lost
         tint = np.median(np.abs(np.diff(data.time)))
         dnu = np.median(data.index_map["freq"]["width"]) * 1e6
-        if "flags/frac_lost" in data:
-            frac_lost = data["flags/frac_lost"][:].local_array
+
+        if ("flags" in data) and ("frac_lost" in data["flags"]):
+            frac_lost = data["flags"]["frac_lost"][:].local_array
         else:
             frac_lost = np.zeros((1, 1), dtype=np.float32)
-        n_draco = dnu * tint * (1.0 - frac_lost)
 
-        # The number the X-engine counted
-        n_xeng = data["flags/valid_fpga_count"][:].local_array.astype(np.float64)
+        # CHORD: the X-engine counts the valid samples of each integration, so use
+        # that number when the data has it
+        if ("flags" in data) and ("valid_fpga_count" in data["flags"]):
+            nint = data["flags"]["valid_fpga_count"][:].local_array.astype(np.float64)
+            nint = nint[:, np.newaxis, :]
+        else:
+            nint = dnu * tint * (1.0 - frac_lost[:, np.newaxis, :])
 
-        scale = np.sqrt(n_draco * tools.invert_no_zero(n_xeng))
-        scale = np.broadcast_to(scale, n_xeng.shape)
-        sens.radiometer[:].local_array[:] *= scale[:, np.newaxis, :]
-        sens.attrs["nsamp"] = "valid_fpga_count"
+        # Normalize by the number of independent samples
+        # and the total number of baselines squared
+        radiometer *= tools.invert_no_zero(nint * radiometer_counter**2)
 
-        good = n_xeng > 0
-        if good.any():
-            dev = np.abs(scale[good] - 1.0)
-            self.log.debug(
-                "Radiometric noise rescaled for valid_fpga_count: median "
-                f"|scale - 1| {np.median(dev):.2e}, max {dev.max():.2e}"
-            )
-        return sens
+        # Create output container
+        metrics = containers.SystemSensitivity(
+            pol=np.array(pol_uniq, dtype="<U2"),
+            axes_from=data,
+            attrs_from=data,
+            comm=data.comm,
+            distributed=data.distributed,
+        )
+
+        metrics.redistribute("freq")
+
+        # In order to write generic code for generating the radiometric
+        # estimate of the sensitivity, we had to sum over the upper and lower triangle
+        # of the visibility matrix.  Below we multiply by sqrt(2) in order to
+        # obtain the sensitivity of the real component.
+        metrics.radiometer[:] = np.sqrt(2.0 * radiometer)
+        metrics.measured[:] = np.sqrt(2.0 * var)
+
+        # Save the total number of baselines that were averaged in the weight dataset
+        metrics.weight[:] = counter
+
+        # Save the fraction of missing samples
+        metrics.frac_lost[:] = frac_lost
+
+        return metrics
 
 
 class RFISensitivityMask(tasklib.base.ContainerTask):

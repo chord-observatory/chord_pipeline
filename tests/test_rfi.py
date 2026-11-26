@@ -159,9 +159,9 @@ def tel(tmp_path):
     return make_tel(tmp_path)
 
 
-def _sens(ts, tel):
+def _sens(ts, tel, **params):
     task = ComputeSystemSensitivity()
-    task.read_config({})
+    task.read_config(params)
     task.setup(tel)
     return task.process(ts)
 
@@ -231,7 +231,6 @@ def test_integrations_of_different_lengths(tel):
     ts = make_ts(nsamp=nsamp)
     sens = _sens(ts, tel)
     np.testing.assert_allclose(_ratio(sens), 1.0, rtol=1e-5)
-    assert sens.attrs["nsamp"] == "valid_fpga_count"
 
 
 def test_without_valid_fpga_count_draco_number_of_samples(tel):
@@ -242,54 +241,46 @@ def test_without_valid_fpga_count_draco_number_of_samples(tel):
     np.testing.assert_allclose(ratio, np.sqrt(n_draco / NSAMP), rtol=1e-5)
 
 
-class _Cylinders:
-    """Telescope view with explicit cylinders: one per dish, from the labels."""
-
-    cylinder_width = 10.0
-
-    def __init__(self, telescope):
-        self._telescope = telescope
-        dish = np.array([label[:-1] for label in telescope.input_labels])
-        _, idx = np.unique(dish, return_inverse=True)
-        self.feedpositions = np.column_stack([20.0 * idx, np.zeros(len(idx))])
-
-    def __getattr__(self, name):
-        if name == "_telescope":
-            raise AttributeError(name)
-        return getattr(self._telescope, name)
+def test_include_intradish(tel):
+    sens = _sens(make_ts(), tel, exclude_intradish=False)
+    np.testing.assert_allclose(_ratio(sens), 1.0, rtol=1e-5)
+    # The 5 autocorrelations (counted once) are added to the 2 x 10 cross-dish
+    # baselines, and the 5 X-Y products of the dishes (counted twice) to the
+    # 2 x 20 cross-polar ones
+    nbl = _full(sens.weight)
+    np.testing.assert_array_equal(np.unique(nbl[:, POL["XX"]]), [25])
+    np.testing.assert_array_equal(np.unique(nbl[:, POL["XY"]]), [50])
 
 
-def test_is_draco_with_one_cylinder_per_dish(tel):
-    # With the X-engine count equal to draco's, the output is draco's own
+def test_is_draco_without_the_exclusion(tel):
+    # With no baselines left out and the X-engine count equal to draco's number of
+    # samples, the output is that of draco's task
     ts = make_ts(noise=0.05, seed=11, nsamp=3200.0 / 16384 * 1e6 * 10.0)
     ts.input_flags[:][np.isin(ts.labels, ["A03Y"])] = 0
-    sens = _sens(ts, tel)
+    sens = _sens(ts, tel, exclude_intradish=False)
 
+    tel.cylinder_width = 0.0  # draco reads it even when it is not used
     ref_task = sensitivity.ComputeSystemSensitivity()
-    ref_task.read_config({"exclude_intracyl": True})
+    ref_task.read_config({"exclude_intracyl": False})
     ref_task.setup(tel)
-    ref_task.telescope = _Cylinders(ref_task.telescope)
     ref = ref_task.process(ts)
 
     assert list(sens.pol) == list(ref.pol)
-    np.testing.assert_array_equal(_full(sens.weight), _full(ref.weight))
-    np.testing.assert_array_equal(_full(sens.measured), _full(ref.measured))
+    for name in ["measured", "weight", "frac_lost"]:
+        np.testing.assert_array_equal(_full(sens[name]), _full(ref[name]))
     np.testing.assert_allclose(_full(sens.radiometer), _full(ref.radiometer), rtol=1e-6)
 
 
-def test_dishes_of_the_pathfinder():
-    from chord_pipeline.analysis.rfi import _DishesAsCylinders
-
+def test_intradish_pairs_of_the_pathfinder():
+    """In the pathfinder layout, the feeds within half a dish separation are the
+    X and Y feeds of one dish."""
     tel = CHORDPathfinder.from_config({})
-    view = _DishesAsCylinders(tel)
-    assert view.ndish == 64 and view.cylinder_width == 1.0
-    labels = list(tel.input_labels)
-    ew = view.feedpositions[:, 0]
-    for k, label in enumerate(labels):
-        other = labels.index(label[:-1] + ("Y" if label[-1] == "X" else "X"))
-        assert ew[k] == ew[other]
-    assert len(np.unique(ew)) == 64
-    assert view.latitude == tel.latitude
+    pos = tel.feedpositions[:, :2]
+    sep = np.hypot(*(pos[:, None] - pos[None, :]).transpose(2, 0, 1))
+    intra = sep < 0.5 * min(tel.u_width, tel.v_width)
+    labels = np.asarray(tel.input_labels)
+    same_dish = labels[:, None].astype("U3") == labels[None, :].astype("U3")
+    np.testing.assert_array_equal(intra, same_dish)
 
 
 @pytest.mark.parametrize("mask_type", ["mad", "sumthreshold", "combine"])
