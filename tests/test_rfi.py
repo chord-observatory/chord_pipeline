@@ -5,9 +5,11 @@ import itertools
 import numpy as np
 import pytest
 from chord_util import rfi as crfi
+from draco.analysis import sensitivity
 
 from chord_pipeline.analysis.rfi import ComputeSystemSensitivity, RFISensitivityMask
 from chord_pipeline.core.container import CHORDTimeStream
+from chord_pipeline.core.telescope import CHORDPathfinder
 
 NSAMP = 1.0e5
 # Night of 2026-10-06/07 (PDT): Cyg A transits in the first hour
@@ -41,14 +43,24 @@ def _full(dset):
 
 
 def make_ts(
-    nfreq=48, ntime=60, ndish=5, freq0=440.0, noise=0.0, seed=0, edit_weight=None
+    nfreq=48,
+    ntime=60,
+    ndish=5,
+    freq0=440.0,
+    noise=0.0,
+    seed=0,
+    edit_weight=None,
+    nsamp=NSAMP,
+    with_count=True,
 ):
     """A small unstacked timestream with radiometer-noise weights.
 
     The autocorrelations are smooth and positive, and the weights of every product
-    are ``w_ab = N / (V_aa V_bb)`` (times ``1 + noise * gaussian``), so the ratio of
-    the measured to the radiometric noise is 1 without noise. `edit_weight` is
-    applied to the full weight array before it is stored.
+    are ``w_ab = N / (V_aa V_bb)`` (times ``1 + noise * gaussian``), with ``N`` the
+    number of samples `nsamp` (a number or one per time), so the ratio of the
+    measured to the radiometric noise is 1 without noise. `edit_weight` is applied
+    to the full weight array before it is stored. ``flags/valid_fpga_count`` is
+    ``N``, unless `with_count` is False.
     """
     rng = np.random.default_rng(seed)
     labels = [f"A0{d + 1}{p}" for p in "XY" for d in range(ndish)]
@@ -64,7 +76,12 @@ def make_ts(
     freq["centre"] = freq0 + np.arange(nfreq) * freq["width"]
     time = T0 + 10.0 * np.arange(ntime)
 
-    ts = CHORDTimeStream(freq=freq, input=inp, prod=prod, time=time)
+    # Unstacked: every product is its own stack (as in the X-engine files)
+    rstack = np.zeros(len(ia), dtype=[("stack", "<u4"), ("conjugate", "u1")])
+    rstack["stack"] = np.arange(len(ia))
+    ts = CHORDTimeStream(
+        freq=freq, input=inp, prod=prod, time=time, reverse_map_stack=rstack
+    )
     for name, val in (
         ("input_info/pol", np.repeat([0, 1], ndish)),
         ("input_info/dish_idx", np.tile(np.arange(ndish), 2)),
@@ -72,8 +89,10 @@ def make_ts(
     ):
         ts.add_dataset(name)
         ts[name][:] = val
-    ts.add_dataset("flags/valid_fpga_count")
-    _set(ts["flags/valid_fpga_count"], np.full((nfreq, ntime), NSAMP))
+    nsamp = np.broadcast_to(np.asarray(nsamp, dtype=np.float64), (ntime,))
+    if with_count:
+        ts.add_dataset("flags/valid_fpga_count")
+        _set(ts["flags/valid_fpga_count"], np.broadcast_to(nsamp, (nfreq, ntime)))
     ts.add_dataset("flags/frac_lost")
     _set(ts["flags/frac_lost"], np.zeros((nfreq, ntime)))
     ts.input_flags[:] = 1
@@ -91,7 +110,7 @@ def make_ts(
     ) * 1e-3
     vis[:, ia == ib] = auto[:, ia[ia == ib]]
     _set(ts.vis, vis)
-    w = NSAMP / (auto[:, ia] * auto[:, ib])
+    w = nsamp / (auto[:, ia] * auto[:, ib])
     w = w * (1.0 + noise * rng.standard_normal(w.shape))
     if edit_weight is not None:
         edit_weight(w)
@@ -124,81 +143,157 @@ def rho_reference(ts, pa, pb, bad=()):
     return np.sqrt(num / den)
 
 
-def test_ratio_is_one_for_radiometer_noise():
-    ts = make_ts()
-    sens = _run(ComputeSystemSensitivity, ts, pol=["XX", "YY", "XY"])
-    assert list(sens.pol) == ["XX", "YY", "XY"]
-    ratio = sens.measured[:].local_array / sens.radiometer[:].local_array
-    np.testing.assert_allclose(ratio, 1.0, rtol=1e-5)
-    # 5 dishes: 10 cross-dish co-polar baselines, 20 cross-polar ones (XY and YX)
-    np.testing.assert_array_equal(np.unique(sens.weight[:].local_array[:, 0]), [10])
-    np.testing.assert_array_equal(np.unique(sens.weight[:].local_array[:, 2]), [20])
+def make_tel(path, ndish=5):
+    """The telescope of `make_ts`: dishes 6.3 m apart east-west."""
+    lines = ["# label chan_id ew_m ns_m pol"]
+    for p, pol in enumerate("XY"):
+        for d in range(ndish):
+            lines.append(f"A0{d + 1}{pol} {d + 64 * p} {6.3 * d} 0.0 {pol}")
+    fname = path / "layout.txt"
+    fname.write_text("\n".join(lines) + "\n")
+    return CHORDPathfinder.from_config({"layout_file": str(fname)})
 
 
-def test_matches_the_notebook_statistic():
+@pytest.fixture
+def tel(tmp_path):
+    return make_tel(tmp_path)
+
+
+def _sens(ts, tel):
+    task = ComputeSystemSensitivity()
+    task.read_config({})
+    task.setup(tel)
+    return task.process(ts)
+
+
+def _ratio(sens):
+    return _full(sens.measured) / _full(sens.radiometer)
+
+
+# draco's polarisation products and their index in the output
+POL = {"XX": 0, "XY": 1, "YY": 2}
+
+
+def test_ratio_is_one_for_radiometer_noise(tel):
+    sens = _sens(make_ts(), tel)
+    assert list(sens.pol) == ["XX", "XY", "YY"]
+    np.testing.assert_allclose(_ratio(sens), 1.0, rtol=1e-5)
+    # 5 dishes: 10 cross-dish co-polar baselines and 20 cross-polar ones (XY and
+    # YX), each counted twice by draco
+    nbl = _full(sens.weight)
+    np.testing.assert_array_equal(np.unique(nbl[:, POL["XX"]]), [20])
+    np.testing.assert_array_equal(np.unique(nbl[:, POL["XY"]]), [40])
+    np.testing.assert_array_equal(np.unique(nbl[:, POL["YY"]]), [20])
+
+
+def test_matches_the_notebook_statistic(tel):
     ts = make_ts(noise=0.05, seed=3)
     bad = ["A02X", "A02Y"]
-    sens = _run(ComputeSystemSensitivity, ts, exclude_labels=bad)
-    ratio = sens.measured[:].local_array / sens.radiometer[:].local_array
-    for k, (pa, pb) in enumerate((("X", "X"), ("Y", "Y"))):
+    ts.input_flags[:][np.isin(ts.labels, bad)] = 0
+    sens = _sens(ts, tel)
+    ratio = _ratio(sens)
+    for p in ("XX", "YY"):
         np.testing.assert_allclose(
-            ratio[:, k], rho_reference(ts, pa, pb, bad=bad), rtol=1e-5
+            ratio[:, POL[p]], rho_reference(ts, p[0], p[1], bad=bad), rtol=1e-5
         )
-    np.testing.assert_array_equal(np.unique(sens.weight[:].local_array), [6])
+    np.testing.assert_array_equal(np.unique(_full(sens.weight)[:, POL["XX"]]), [12])
 
 
-def test_autos_and_same_dish_not_used():
+def test_autos_and_same_dish_not_used(tel):
     ts = make_ts()
     ia, ib = ts.prod["input_a"], ts.prod["input_b"]
     dish = ts["input_info/dish_idx"][:]
     same = dish[ia] == dish[ib]
     w = ts.weight[:].local_array
     w[:, same] = 1e-6  # a huge variance: would dominate if used
-    sens = _run(ComputeSystemSensitivity, ts)
-    np.testing.assert_allclose(
-        sens.measured[:].local_array / sens.radiometer[:].local_array, 1.0, rtol=1e-5
-    )
+    np.testing.assert_allclose(_ratio(_sens(ts, tel)), 1.0, rtol=1e-5)
 
 
 def _burst(w):
     w[5:8, :, 20:25] /= 4.0  # variance x 4 within the integration: ratio 2
 
 
-def test_rfi_raises_the_ratio_and_flags_remove_baselines():
+def test_rfi_raises_the_ratio_and_flags_remove_baselines(tel):
     ts = make_ts(edit_weight=_burst)
     flags = ts.input_flags[:]
     flags[0, 40:] = 0  # A01X flagged for the second part
-    sens = _run(ComputeSystemSensitivity, ts)
-    ratio = _full(sens.measured)[:, 0] / _full(sens.radiometer)[:, 0]
+    sens = _sens(ts, tel)
+    ratio = _ratio(sens)[:, POL["XX"]]
     np.testing.assert_allclose(ratio[5:8, 20:25], 2.0, rtol=1e-5)
     np.testing.assert_allclose(np.delete(ratio, np.s_[5:8], axis=0), 1.0, rtol=1e-5)
-    nbl = _full(sens.weight)[:, 0]
-    assert (nbl[:, :40] == 10).all() and (nbl[:, 40:] == 6).all()
-
-    sens2 = _run(ComputeSystemSensitivity, ts, use_input_flags=False)
-    assert (_full(sens2.weight)[:, 0] == 10).all()
+    nbl = _full(sens.weight)[:, POL["XX"]]
+    assert (nbl[:, :40] == 20).all() and (nbl[:, 40:] == 12).all()
 
 
-def test_nsamp_from_bandwidth():
-    ts = make_ts()
-    _set(ts["flags/frac_lost"], np.full((48, 60), 0.5))
-    sens = _run(ComputeSystemSensitivity, ts, nsamp="bandwidth")
-    ref = _run(ComputeSystemSensitivity, ts)
-    n_bw = 3200.0 / 16384 * 1e6 * 10.0 * 0.5
-    np.testing.assert_allclose(
-        sens.radiometer[:].local_array,
-        ref.radiometer[:].local_array * np.sqrt(NSAMP / n_bw),
-        rtol=1e-5,
-    )
+def test_integrations_of_different_lengths(tel):
+    # As in the X-engine: some integrations one frame (of 119) shorter
+    nsamp = np.where(np.arange(60) % 3 == 0, NSAMP * (1 - 1 / 119), NSAMP)
+    ts = make_ts(nsamp=nsamp)
+    sens = _sens(ts, tel)
+    np.testing.assert_allclose(_ratio(sens), 1.0, rtol=1e-5)
+    assert sens.attrs["nsamp"] == "valid_fpga_count"
 
 
-def test_unknown_product():
-    with pytest.raises(ValueError):
-        _run(ComputeSystemSensitivity, make_ts(), pol=["XX", "QQ"])
+def test_without_valid_fpga_count_draco_number_of_samples(tel):
+    ts = make_ts(with_count=False)
+    ratio = _ratio(_sens(ts, tel))
+    # draco's number of samples: channel width x integration time
+    n_draco = 3200.0 / 16384 * 1e6 * 10.0
+    np.testing.assert_allclose(ratio, np.sqrt(n_draco / NSAMP), rtol=1e-5)
+
+
+class _Cylinders:
+    """Telescope view with explicit cylinders: one per dish, from the labels."""
+
+    cylinder_width = 10.0
+
+    def __init__(self, telescope):
+        self._telescope = telescope
+        dish = np.array([label[:-1] for label in telescope.input_labels])
+        _, idx = np.unique(dish, return_inverse=True)
+        self.feedpositions = np.column_stack([20.0 * idx, np.zeros(len(idx))])
+
+    def __getattr__(self, name):
+        if name == "_telescope":
+            raise AttributeError(name)
+        return getattr(self._telescope, name)
+
+
+def test_is_draco_with_one_cylinder_per_dish(tel):
+    # With the X-engine count equal to draco's, the output is draco's own
+    ts = make_ts(noise=0.05, seed=11, nsamp=3200.0 / 16384 * 1e6 * 10.0)
+    ts.input_flags[:][np.isin(ts.labels, ["A03Y"])] = 0
+    sens = _sens(ts, tel)
+
+    ref_task = sensitivity.ComputeSystemSensitivity()
+    ref_task.read_config({"exclude_intracyl": True})
+    ref_task.setup(tel)
+    ref_task.telescope = _Cylinders(ref_task.telescope)
+    ref = ref_task.process(ts)
+
+    assert list(sens.pol) == list(ref.pol)
+    np.testing.assert_array_equal(_full(sens.weight), _full(ref.weight))
+    np.testing.assert_array_equal(_full(sens.measured), _full(ref.measured))
+    np.testing.assert_allclose(_full(sens.radiometer), _full(ref.radiometer), rtol=1e-6)
+
+
+def test_dishes_of_the_pathfinder():
+    from chord_pipeline.analysis.rfi import _DishesAsCylinders
+
+    tel = CHORDPathfinder.from_config({})
+    view = _DishesAsCylinders(tel)
+    assert view.ndish == 64 and view.cylinder_width == 1.0
+    labels = list(tel.input_labels)
+    ew = view.feedpositions[:, 0]
+    for k, label in enumerate(labels):
+        other = labels.index(label[:-1] + ("Y" if label[-1] == "X" else "X"))
+        assert ew[k] == ew[other]
+    assert len(np.unique(ew)) == 64
+    assert view.latitude == tel.latitude
 
 
 @pytest.mark.parametrize("mask_type", ["mad", "sumthreshold", "combine"])
-def test_mask_flags_rfi_and_static(mask_type):
+def test_mask_flags_rfi_and_static(mask_type, tel):
     # 600-660 MHz includes static bands (cellular, 617-652 MHz)
     nfreq, ntime = 300, 240
 
@@ -209,11 +304,12 @@ def test_mask_flags_rfi_and_static(mask_type):
     ts = make_ts(
         nfreq=nfreq, ntime=ntime, freq0=600.0, noise=0.02, seed=5, edit_weight=rfi
     )
-    sens = _run(ComputeSystemSensitivity, ts)
+    sens = _sens(ts, tel)
     mask = _run(
         RFISensitivityMask,
         sens,
         mask_type=mask_type,
+        include_pol=["XX", "YY"],
         base_size=[9, 31],
         mad_size=[21, 11],
         win_f_1d=31,
@@ -231,12 +327,12 @@ def test_mask_flags_rfi_and_static(mask_type):
     assert mask.attrs["mask_type"] == mask_type
 
 
-def test_mask_matches_chord_util():
+def test_mask_matches_chord_util(tel):
     def rfi(w):
         w[60:62, :, 50:60] /= 3.0
 
     ts = make_ts(nfreq=200, ntime=200, freq0=440.0, noise=0.02, seed=7, edit_weight=rfi)
-    sens = _run(ComputeSystemSensitivity, ts)
+    sens = _sens(ts, tel)
     params = dict(base_size=(9, 31), mad_size=(21, 11), win_f_1d=31)
     mask = _run(
         RFISensitivityMask,
