@@ -7,7 +7,7 @@ from typing import ClassVar, Iterable, Mapping
 
 import h5py
 import numpy as np
-from caput.containers import COMPRESSION, COMPRESSION_OPTS
+from caput.containers import COMPRESSION, COMPRESSION_OPTS, ContainerPrototype
 from caput.util import typeutils
 from chord_util.andata import (  # noqa: F401
     INPUT_TYPE_DISH,
@@ -54,7 +54,7 @@ class CHORDSiderealStream(SiderealStream):
                     f"File {filename} is missing 'index_map' group; "
                     "not a valid CHORD visibility file."
                 )
-                
+
             freq = np.array(fh["index_map/freq"][:])
             prod = np.array(fh["index_map/prod"][:])
 
@@ -325,7 +325,9 @@ class CHORDTimeStream(TimeStream, RawContainer):
         },
         "input_info/feed_pos_disp_m": _small_dset(np.float64, ["input", "xyz"]),
         "input_info/feed_positions_m": _small_dset(np.float64, ["input", "xyz"]),
-        "input_info/main_array_grid_indices": _small_dset(np.int64, ["input", "grid_xy"]),
+        "input_info/main_array_grid_indices": _small_dset(
+            np.int64, ["input", "grid_xy"]
+        ),
         # Telescope description
         "dish_positions_in_grid_coords": _small_dset(np.float64, ["dish", "xyz"]),
         # kotekan/FPGA configuration snapshots (JSON strings of varying length)
@@ -477,3 +479,165 @@ class CHORDTimeStream(TimeStream, RawContainer):
                 for lbl in self.input["correlator_input"]
             ]
         )
+
+
+# Containers of the eigen-calibration (chord_pipeline.analysis.calibration)
+
+
+class EigenDecompBase(ContainerPrototype):
+    """Base class for the eigendecomposition of the visibility matrix."""
+
+    _axes = ("ev",)
+
+    @property
+    def ev(self):
+        """Get the ev index map."""
+        return self.index_map["ev"]
+
+    @property
+    def evec(self):
+        """Get the evec dataset."""
+        return self.datasets["evec"]
+
+    @property
+    def eval(self):
+        """Get the eval dataset."""
+        return self.datasets["eval"]
+
+    @property
+    def erms(self):
+        """Get the erms dataset."""
+        return self.datasets["erms"]
+
+
+class TimeEigenDecomp(TimeStream, EigenDecompBase):
+    """Container for holding an eigendecomposition of N2 visibilities versus time."""
+
+    _dataset_spec: ClassVar = {
+        "evec": {
+            "axes": ["freq", "ev", "input", "time"],
+            "dtype": np.complex64,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+        "eval": {
+            "axes": ["freq", "ev", "time"],
+            "dtype": np.float32,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+        "erms": {
+            "axes": ["freq", "time"],
+            "dtype": np.float32,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+    }
+
+
+class SiderealEigenDecomp(SiderealStream, EigenDecompBase):
+    """Container for holding an eigendecomposition of N2 visibilities versus RA."""
+
+    _dataset_spec: ClassVar = {
+        "evec": {
+            "axes": ["freq", "ev", "input", "ra"],
+            "dtype": np.complex64,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+        "eval": {
+            "axes": ["freq", "ev", "ra"],
+            "dtype": np.float32,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+        "erms": {
+            "axes": ["freq", "ra"],
+            "dtype": np.float32,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+    }
+
+
+class TransitFitParams(ContainerPrototype):
+    """Container for the results of fitting a model to a point source transit."""
+
+    _axes = ("freq", "input", "param", "component")
+
+    _dataset_spec: ClassVar = {
+        "parameter": {
+            "axes": ["freq", "input", "param"],
+            "dtype": np.float32,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+        "parameter_cov": {
+            "axes": ["freq", "input", "param", "param"],
+            "dtype": np.float32,
+            "initialise": True,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+        "chisq": {
+            "axes": ["freq", "input", "component"],
+            "dtype": np.float32,
+            "initialise": False,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+        "ndof": {
+            "axes": ["freq", "input", "component"],
+            "dtype": int,
+            "initialise": False,
+            "distributed": True,
+            "distributed_axis": "freq",
+        },
+    }
+
+    @property
+    def parameter(self):
+        """Get the best-fit parameters."""
+        return self.datasets["parameter"]
+
+    @property
+    def parameter_cov(self):
+        """Get the covariance of the parameters."""
+        return self.datasets["parameter_cov"]
+
+    @property
+    def chisq(self):
+        """Get the chi-squared of each component of the fit."""
+        return self.datasets["chisq"]
+
+    @property
+    def ndof(self):
+        """Get the number of degrees of freedom of each component of the fit."""
+        return self.datasets["ndof"]
+
+    @property
+    def freq(self):
+        """Get the frequency centres."""
+        return self.index_map["freq"]["centre"]
+
+    @property
+    def input(self):
+        """Get the input index map."""
+        return self.index_map["input"]
+
+    @property
+    def param(self):
+        """Get the parameter names."""
+        return self.index_map["param"]
+
+    @property
+    def component(self):
+        """Get the fit components."""
+        return self.index_map["component"]
