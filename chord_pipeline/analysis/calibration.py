@@ -1,33 +1,4 @@
-"""Tasks for the calibration of CHORD data with a point source transit.
-
-The eigen-calibration of CHIME (``ch_pipeline.analysis.calibration``), with the
-eigendecomposition of the visibility matrix done here:
-
-- :class:`PerformEigenDecomp`: eigendecomposition of the visibility matrix of
-  each frequency and time, with the short baselines (e.g. the autocorrelations
-  and the products of one dish) replaced by their low-rank approximation.
-- :class:`EigenCalibration`: the response of each input to a point source from
-  the dominant eigenvectors.
-- :class:`DetermineSourceTransit`, :class:`TransitFit`,
-  :class:`GainFromTransitFit`: fit a model to the transit and take the gain from
-  the fit.
-- :class:`FlagAmplitude`, :class:`InterpolateGainOverFrequency`: flag outlier
-  gains and interpolate the gains over the flagged frequencies.
-
-Ported from the draco ``eigencal`` branch. Changes from that branch:
-
-- ``PerformEigenDecomp`` sets the masked entries to zero before iterating, as
-  the real-time eigendecomposition in kotekan does.
-- ``EigenCalibration`` sets the response of the excluded inputs to zero instead
-  of leaving it uninitialised.
-- ``FlagAmplitude`` works with an ``MPIArray`` or a numpy array for the fraction
-  of good frequencies of each input (as given by the version of caput), and on a
-  single process (see `_gather_local`).
-
-The fit models and the gain interpolation are in :mod:`chord_util.cal_utils`,
-the sources in :mod:`chord_ephem.sources`, and the containers of the
-eigendecomposition and of the fit in :mod:`chord_pipeline.core.container`.
-"""
+"""Tasks for the calibration of CHORD data"""
 
 import json
 
@@ -233,7 +204,7 @@ class PerformEigenDecomp(tasklib.base.ContainerTask):
                 )
 
                 # Set the masked entries to zero before the first iteration, as the
-                # real-time eigendecomposition in kotekan does. Otherwise a large
+                # real-time eigendecomposition in kotekan does. Otherwise, a large
                 # masked value (an autocorrelation) is reproduced by the low-rank
                 # approximation and is a fixed point of the iteration.
                 if niter > 0:
@@ -680,8 +651,6 @@ class EigenCalibration(tasklib.base.ContainerTask):
 
 class DetermineSourceTransit(tasklib.base.ContainerTask):
     """
-    TODO: move generalized FluxCatalog object out of ch_util.fluxcat and import
-
     Determine the sources that are transiting within time range covered by container.
 
     Attributes
@@ -759,8 +728,6 @@ class DetermineSourceTransit(tasklib.base.ContainerTask):
 
 class TransitFit(tasklib.base.ContainerTask):
     """
-    TODO: Check defaults
-
     Fit model to the transit of a point source.
 
     Multiple model choices are available and can be specified through the `model`
